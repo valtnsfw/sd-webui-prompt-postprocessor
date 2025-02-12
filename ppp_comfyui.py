@@ -15,6 +15,9 @@ if __name__ == "__main__":
 
 
 class PromptPostProcessorComfyUINode:
+    """
+    Node for processing prompts.
+    """
 
     logger = None
 
@@ -95,22 +98,13 @@ class PromptPostProcessorComfyUINode:
                         "forceInput": False,
                     },
                 ),
-                "pony_substrings": (
+                "variants_definitions": (
                     "STRING",
                     {
-                        "default": PromptPostProcessor.DEFAULT_PONY_SUBSTRINGS,
-                        "placeholder": "comma separated list",
-                        "tooltip": "Comma separated list of substrings to look for in the modelname to determine if the model is a pony model",
-                        "defaultInput": False,
-                        "forceInput": False,
-                    },
-                ),
-                "illustrious_substrings": (
-                    "STRING",
-                    {
-                        "default": PromptPostProcessor.DEFAULT_ILLUSTRIOUS_SUBSTRINGS,
-                        "placeholder": "comma separated list",
-                        "tooltip": "Comma separated list of substrings to look for in the modelname to determine if the model is an illustrious model",
+                        "default": PromptPostProcessor.DEFAULT_VARIANTS_DEFINITIONS,
+                        "multiline": True,
+                        "placeholder": "",
+                        "tooltip": "Definitions for variant models to be recognized based on strings found in the full filename. Format for each line is: 'name(kind)=comma separated list of substrings (case insensitive)' with kind being one of the base model types or not specified",
                         "defaultInput": False,
                         "forceInput": False,
                     },
@@ -324,10 +318,12 @@ class PromptPostProcessorComfyUINode:
     RETURN_TYPES = (
         "STRING",
         "STRING",
+        "PPP_DICT",
     )
     RETURN_NAMES = (
         "pos_prompt",
         "neg_prompt",
+        "variables",
     )
 
     FUNCTION = "process"
@@ -343,8 +339,7 @@ class PromptPostProcessorComfyUINode:
         neg_prompt,
         seed,
         debug_level,  # pylint: disable=unused-argument
-        pony_substrings,
-        illustrious_substrings,
+        variants_definitions,
         wc_process_wildcards,
         wc_wildcards_folders,
         wc_if_wildcards,
@@ -365,15 +360,16 @@ class PromptPostProcessorComfyUINode:
         remove_extranetwork_tags,
     ):
         if wc_process_wildcards:
-            return float("NaN") # since we can't detect changes in wildcards we assume they are always changed when enabled
+            return float(
+                "NaN"
+            )  # since we can't detect changes in wildcards we assume they are always changed when enabled
         new_run = {  # everything except debug_level
             "model": model,
             "modelname": modelname,
             "pos_prompt": pos_prompt,
             "neg_prompt": neg_prompt,
             "seed": seed,
-            "pony_substrings": pony_substrings,
-            "illustrious_substrings": illustrious_substrings,
+            "variants_definitions": variants_definitions,
             "process_wildcards": wc_process_wildcards,
             "wildcards_folders": wc_wildcards_folders,
             "if_wildcards": wc_if_wildcards,
@@ -404,8 +400,7 @@ class PromptPostProcessorComfyUINode:
         neg_prompt,
         seed,
         debug_level,
-        pony_substrings,
-        illustrious_substrings,
+        variants_definitions,
         wc_process_wildcards,
         wc_wildcards_folders,
         wc_if_wildcards,
@@ -444,11 +439,11 @@ class PromptPostProcessorComfyUINode:
             ),
             "is_ssd": modelclass in ("SSD1B",),
             "is_sd3": modelclass in ("SD3",),
-            "is_flux": modelclass in ("Flux",),
+            "is_flux": modelclass in ("Flux", "FluxInpaint", "FluxSchnell"),
             "is_auraflow": modelclass in ("AuraFlow",),
         }
-        # SVD_img2vid, SVD3D_u, SVD3_p, Stable_Zero123, SD_X4Upscaler,
-        # Stable_Cascade_C, Stable_Cascade_B, StableAudio
+        # Also supported: SVD_img2vid, SVD3D_u, SVD3_p, Stable_Zero123, SD_X4Upscaler,
+        # Stable_Cascade_C, Stable_Cascade_B, StableAudio, HunyuanDiT, HunyuanDiT1, GenmoMochi, LTXV
 
         if wc_wildcards_folders == "":
             wc_wildcards_folders = ",".join(folder_paths.get_folder_paths("wildcards") or [])
@@ -459,10 +454,11 @@ class PromptPostProcessorComfyUINode:
             for f in wc_wildcards_folders.split(",")
             if f.strip() != ""
         ]
+        if variants_definitions != "" and not "=" in variants_definitions:  # mainly to warn about the old format
+            raise ValueError("Invalid variants_definitions format")
         options = {
             "debug_level": debug_level,
-            "pony_substrings": pony_substrings,
-            "illustrious_substrings": illustrious_substrings,
+            "variants_definitions": variants_definitions,
             "process_wildcards": wc_process_wildcards,
             "if_wildcards": wc_if_wildcards,
             "choice_separator": wc_choice_separator,
@@ -485,11 +481,67 @@ class PromptPostProcessorComfyUINode:
         ppp = PromptPostProcessor(
             self.logger, self.interrupt, env_info, options, self.grammar_content, self.wildcards_obj
         )
-        pos_prompt, neg_prompt = ppp.process_prompt(pos_prompt, neg_prompt, seed if seed is not None else 1)
+        pos_prompt, neg_prompt, variables = ppp.process_prompt(pos_prompt, neg_prompt, seed if seed is not None else 1)
         return (
             pos_prompt,
             neg_prompt,
+            variables,
         )
 
     def interrupt(self):
         nodes.interrupt_processing(True)
+
+
+class PromptPostProcessorSelectVariableComfyUINode:
+    """
+    Node for selecting a variable from a dictionary.
+    """
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "variables": (
+                    "PPP_DICT",
+                    {
+                        "forceInput": True,
+                    },
+                ),
+            },
+            "optional": {
+                "name": (
+                    "STRING",
+                    {
+                        "placeholder": "variable name",
+                        "multiline": False,
+                        "default": "",
+                        "dynamicPrompts": False,
+                        "defaultInput": False,
+                        "forceInput": False,
+                    },
+                ),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("value",)
+
+    FUNCTION = "select"
+
+    CATEGORY = "ACB"
+
+    def select(
+        self,
+        variables: dict[str, str],
+        name: str,
+    ):
+        value = ""
+        if variables:
+            if name == "":
+                value = "\n".join(f"{k}: {v}" for k, v in variables.items())
+            elif name in variables:
+                value = variables[name]
+        return (value,)

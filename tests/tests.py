@@ -29,8 +29,7 @@ class TestPromptPostProcessor(unittest.TestCase):
         self.__ppp_logger.setLevel(logging.DEBUG)
         self.__defopts = {
             "debug_level": DEBUG_LEVEL.full.value,
-            "pony_substrings": PromptPostProcessor.DEFAULT_PONY_SUBSTRINGS,
-            "illustrious_substrings": PromptPostProcessor.DEFAULT_ILLUSTRIOUS_SUBSTRINGS,
+            "variants_definitions": PromptPostProcessor.DEFAULT_VARIANTS_DEFINITIONS,
             "process_wildcards": True,
             "if_wildcards": PromptPostProcessor.IFWILDCARDS_CHOICES.ignore.value,
             "choice_separator": ", ",
@@ -142,7 +141,7 @@ class TestPromptPostProcessor(unittest.TestCase):
         the_obj = ppp or self.__defppp
         out = expected_output_prompts if isinstance(expected_output_prompts, list) else [expected_output_prompts]
         for eo in out:
-            result_prompt, result_negative_prompt = the_obj.process_prompt(
+            result_prompt, result_negative_prompt, _ = the_obj.process_prompt(
                 input_prompts.prompt,
                 input_prompts.negative_prompt,
                 seed,
@@ -356,7 +355,7 @@ class TestPromptPostProcessor(unittest.TestCase):
     def test_cmd_if_nested(self):  # nested if command
         self.__process(
             PromptPair(
-                "this is <ppp:if _sd eq 'sd1'>SD1<ppp:else><ppp:if _is_pony>PONY<ppp:else>SD2<ppp:/if><ppp:/if>", ""
+                "this is <ppp:if _sd eq 'sd1'>SD1<ppp:else><ppp:if _is_pony>PONY<ppp:else>SD2<ppp:/if><ppp:/if><ppp:if _is_sdxl_no_pony>NOPONY<ppp:/if><ppp:if _is_pure_sdxl>NOPONY<ppp:/if>", ""
             ),
             PromptPair("this is PONY", ""),
             ppp=PromptPostProcessor(
@@ -391,6 +390,48 @@ class TestPromptPostProcessor(unittest.TestCase):
                 "",
             ),
             PromptPair("OK OK OK", ""),
+        )
+
+    def test_cmd_set_if_complex_conditions_1(self):  # complex conditions (or)
+        self.__process(
+            PromptPair("<ppp:set v1>true<ppp:/set><ppp:set v2>false<ppp:/set>this test is <ppp:if v1 or v2>OK<ppp:else>not OK<ppp:/if>", ""),
+            PromptPair("this test is OK", ""),
+        )
+
+    def test_cmd_set_if_complex_conditions_2(self):  # complex conditions (and)
+        self.__process(
+            PromptPair("<ppp:set v1>true<ppp:/set><ppp:set v2>true<ppp:/set>this test is <ppp:if v1 and v2>OK<ppp:else>not OK<ppp:/if>", ""),
+            PromptPair("this test is OK", ""),
+        )
+
+    def test_cmd_set_if_complex_conditions_3(self):  # complex conditions (not)
+        self.__process(
+            PromptPair("<ppp:set v1>false<ppp:/set>this test is <ppp:if not v1>OK<ppp:else>not OK<ppp:/if>", ""),
+            PromptPair("this test is OK", ""),
+        )
+
+    def test_cmd_set_if_complex_conditions_4(self):  # complex conditions (not, precedence)
+        self.__process(
+            PromptPair("<ppp:set v1>true<ppp:/set><ppp:set v2>false<ppp:/set>this test is <ppp:if not (v1 and v2)>OK<ppp:else>not OK<ppp:/if>", ""),
+            PromptPair("this test is OK", ""),
+        )
+
+    def test_cmd_set_if_complex_conditions_5(self):  # complex conditions (not, precedence, comparison)
+        self.__process(
+            PromptPair("<ppp:set v1>1<ppp:/set><ppp:set v2>false<ppp:/set>this test is <ppp:if not(v1 eq '1' and v2)>OK<ppp:else>not OK<ppp:/if>", ""),
+            PromptPair("this test is OK", ""),
+        )
+
+    def test_cmd_set_if_complex_conditions_6(self):  # complex conditions
+        self.__process(
+            PromptPair("<ppp:set v1>1<ppp:/set><ppp:set v2>2<ppp:/set><ppp:set v3>3<ppp:/set>this test is <ppp:if v1 eq '1' and v2 eq '2' and v3 eq '3'>OK<ppp:else>not OK<ppp:/if>", ""),
+            PromptPair("this test is OK", ""),
+        )
+
+    def test_cmd_set_if_complex_conditions_7(self):  # complex conditions
+        self.__process(
+            PromptPair("<ppp:set v1>1<ppp:/set><ppp:set v2>2<ppp:/set><ppp:set v3>3<ppp:/set>this test is <ppp:if v1 eq '1' and v2 not eq '2' or v3 eq '3'>OK<ppp:else>not OK<ppp:/if>", ""),
+            PromptPair("this test is OK", ""),
         )
 
     def test_cmd_set_if2(self):  # set and more complex if commands
@@ -441,6 +482,42 @@ class TestPromptPostProcessor(unittest.TestCase):
                 "",
             ),
             ppp=self.__nocupppp,
+        )
+
+    def test_cmd_set_ifundefined_if(self):  # set, ifundefined and if commands
+        self.__process(
+            PromptPair(
+                "<ppp:set v ifundefined>value<ppp:/set>this test is <ppp:if v eq 'value'>OK<ppp:else>not OK<ppp:/if>",
+                "",
+            ),
+            PromptPair("this test is OK", ""),
+        )
+
+    def test_cmd_set_ifundefined_if_2(self):  # set, ifundefined and if commands
+        self.__process(
+            PromptPair(
+                "<ppp:set v>value<ppp:/set><ppp:set v ifundefined>value2<ppp:/set>this test is <ppp:if v eq 'value'>OK<ppp:else>not OK<ppp:/if>",
+                "",
+            ),
+            PromptPair("this test is OK", ""),
+        )
+
+    def test_cmd_set_ifundefined_DP_if(self):  # set, ifundefined (DP format) and if commands
+        self.__process(
+            PromptPair(
+                "${v?=value}this test is <ppp:if v eq 'value'>OK<ppp:else>not OK<ppp:/if>",
+                "",
+            ),
+            PromptPair("this test is OK", ""),
+        )
+
+    def test_cmd_set_ifundefined_DP_if_2(self):  # set, ifundefined (DP format) and if commands
+        self.__process(
+            PromptPair(
+                "${v=!value}${v?=!value2}this test is <ppp:if v eq 'value'>OK<ppp:else>not OK<ppp:/if>",
+                "",
+            ),
+            PromptPair("this test is OK", ""),
         )
 
     # Choices tests
@@ -687,6 +764,20 @@ class TestPromptPostProcessor(unittest.TestCase):
             ppp=self.__nocupppp,
         )
 
+    def test_wc_test2_yaml(self):  # simple yaml wildcard
+        self.__process(
+            PromptPair("the choice is: __testwc/test2__", ""),
+            PromptPair("the choice is: 2", ""),
+            ppp=self.__nocupppp,
+        )
+
+    def test_wc_test3_yaml(self):  # simple yaml wildcard
+        self.__process(
+            PromptPair("the choice is: __testwc/test3__", ""),
+            PromptPair("the choice is: one choice", ""),
+            ppp=self.__nocupppp,
+        )
+
     def test_wc_wildcard_filter_index(self):  # wildcard with positional index filter
         self.__process(
             PromptPair("the choice is: __yaml/wildcard2'2'__", ""),
@@ -823,6 +914,28 @@ class TestPromptPostProcessor(unittest.TestCase):
             PromptPair("the choices are: __yaml/anonwildcards__", ""),
             PromptPair("the choices are: six", ""),
             ppp=self.__nocupppp,
+        )
+
+    # Model variants tests
+
+    def test_variants(self):
+        self.__process(
+            PromptPair("<ppp:if _is_test1>test1<ppp:/if><ppp:if _is_test2>test2<ppp:/if><ppp:if _is_test3>test3<ppp:/if><ppp:if _is_test4>test4<ppp:/if>", ""),
+            PromptPair("test1test2", ""),
+            ppp=PromptPostProcessor(
+                self.__ppp_logger,
+                self.__interrupt,
+                {
+                    **self.__def_env_info,
+                    "model_filename": "./webui/models/Stable-diffusion/testmodel.safetensors",
+                },
+                {
+                    **self.__defopts,
+                    "variants_definitions": "test1(sdxl)=testmodel\ntest2=testmodel\ntest3(sd1)=testmodel\ntest4(invalid)=testmodel\nsdxl()=testmodel",
+                },
+                self.__grammar_content,
+                self.__wildcards_obj,
+            ),
         )
 
     # ComfyUI tests
